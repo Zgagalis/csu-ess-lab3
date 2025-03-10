@@ -1,0 +1,322 @@
+---
+
+title: "Lab 3: COVID-19"
+subtitle: 'Ecosystem Science and Sustainability 330'
+author: 
+  - name: Zoe Gagalis
+    email: zgagalis@colostate.edu
+format: html
+execute: 
+  echo: true
+
+---
+
+```{r}
+### install and load libraries
+library(tidyverse)
+library(flextable)
+library(zoo)
+
+```
+
+
+
+```{r}
+### Question 1
+
+url = 'https://raw.githubusercontent.com/nytimes/covid-19-data/master/us-counties.csv'
+covid = read_csv(url)
+
+### access to this data helps us understand trends over time so we can be better prepared for future scenarios
+### if this data becomes inaccessible we lose a huge source of information which would be essential in
+  ## the future to inform decisions, policy, etc.
+```
+
+
+```{r}
+
+### Question 2
+
+txt <- "2022-02-01"
+class(txt)
+
+today.date <- as.Date("2022-02-01")
+my.state <- "Colorado"
+
+colorado <- covid |>
+  filter(state == "Colorado") |>
+  group_by(county)|>
+  arrange(date) |>
+  mutate(new_cases = cases - lag(cases),
+         new_deaths = deaths - lag(deaths)) |>
+  ungroup()
+
+####
+  
+filter(colorado, date == today.date) |>
+  slice_max(cases, n=5) |>
+  select(Date = date, CountyName = county, NumberCases = cases) |>
+  flextable() |>
+  set_caption("Most Cases Overall")
+
+####
+
+filter(colorado, date == today.date) |>
+  slice_max(cases, n=5) |>
+  select(Date = date, County = county, Cases = new_cases) |>
+  flextable() |>
+  set_caption(caption = "New Cases")
+
+```
+
+
+```{r}
+
+### question 3
+
+population_url <- 'https://www2.census.gov/programs-surveys/popest/datasets/2020-2023/counties/totals/co-est2023-alldata.csv'
+
+population <- read.csv(population_url) |>
+  filter(COUNTY !=0) |>
+  mutate(fips = paste0(sprintf("%02d", STATE),
+                       sprintf("%03d", COUNTY))) |>
+  select(fips, contains('NAME'), contains('2021'))
+
+names(population)
+dim(population)
+nrow(population)
+str (population)
+
+
+range(population$POPESTIMATE2021)
+
+ 
+population2 <- population |>
+  rename(state = STNAME)
+
+perCap = inner_join(colorado, select(population,
+                                     fips,
+                                     population = POPESTIMATE2021),
+                    by = 'fips') |>
+  filter(date == today.date) |>
+  mutate(percapitaCumulative = cases / population,
+         newCasesPerCap = new_cases / population,
+         newDeathsPerCap = new_deaths / population)
+
+perCap |>
+  summarize(totalcumulativecases = sum(percapitaCumulative),
+            totalnewcases = sum(newCasesPerCap),
+            totalnewdeaths = sum(newDeathsPerCap))
+#######
+
+perCap |>
+  select(County = county, Cases = percapitaCumulative) |>
+  slice_max(Cases, n=5) |>
+  flextable() |>
+  set_caption(caption = "Most Cumulative Cases Per Capita")
+
+perCap |> 
+  select(County = county, Cases = newCasesPerCap) |>
+  slice_max(Cases, n=5) |>
+  flextable() |>
+  set_caption(caption = "Most New Cases Per Capita")
+
+
+###### the data has 3144 observations and 19 variables
+##### fips, state name, city name, population estimate 2021, N population change 2021,
+#### births 2021, deaths 2021, natural change 2021, international migration 2021, domestic migration 2021, 
+### net migration 2021, residual 2021, GQ estimate 2021, r births 2021, r death 2021, r natural change 2021,
+## r international migration 2021, r domestic change 2021, r net migration, 2021
+
+
+####
+
+```
+
+
+```{r}
+
+### Question 4
+
+safe <- population2 |>
+  inner_join(colorado, by = "fips") |>
+  filter(between(date, today.date - 13, today.date)) |>
+  group_by(county) |>
+  summarize(lag = sum(new_cases)/(POPESTIMATE2021[1]/100000)) |>
+  ungroup()
+
+safe |>
+  select(County = county, Cases = lag) |>
+  slice_max(Cases, n = 5) |>
+  flextable() |>
+  set_caption(caption = "New Cases in the last 14 Days (per 100,000 people)")
+
+```
+
+
+
+```{r}
+### Question 5
+
+tmp.date = as.Date("2022-02-01")
+
+lubridate::year(tmp.date)
+
+lubridate::month(tmp.date)
+
+lubridate::yday(tmp.date)
+
+x <- colorado |>
+  mutate(year = lubridate::year(date)) |>
+  filter(year == 2021) |>
+  group_by(fips) |>
+  summarize(totaldeaths = sum(new_deaths, na.rm = TRUE)) |>
+  left_join(population, by = c("fips")) |>
+  mutate(death_ratio = 100 * (totaldeaths / DEATHS2021)) |>
+  select(CTYNAME, totaldeaths, DEATHS2021, death_ratio) |>
+  filter(death_ratio > 20)
+
+ggplot(x) +
+  geom_col(aes(x = death_ratio, y = CTYNAME)) +
+  theme_dark()
+
+
+
+
+
+
+```
+
+
+```{r}
+### Question 6
+
+state_covid = covid |>
+  group_by(date, state) |>
+  summarize(cases = sum(cases)) |>
+  filter(state %in% c("New York", "Ohio", "Colorado", "Alabama")) |>
+  group_by(state) |>
+  mutate(NewCases = cases - lag(cases),
+         roll = zoo::rollmean(NewCases, k = 7, align = "right", fill = NA)) |>
+  ungroup()
+
+#########
+
+
+ggplot(state_covid, aes(x = date)) +
+  geom_col(aes(y = NewCases), fill = "purple", col = NA) +
+  geom_line(aes(y = roll), col = "yellow", size = 1) +
+  theme_linedraw() +
+  facet_wrap(~state, nrow = 2, scales = "free_y") +
+  labs(title = "Cumulative Cases (Rolling Average)", x = "Date", y = "Cases")
+
+
+state_capita <- inner_join(state_covid, population2, by = "state") |>
+  filter(date == today.date) |>
+  mutate(percapitaCumulative = cases / POPESTIMATE2021,
+         newCasesPerCap = NewCases / POPESTIMATE2021)
+
+state_capita |>
+  filter(state == "Colorado") |>
+  summarize(sum(newCasesPerCap))
+
+state_capita |>
+  filter(state == "Alabama") |>
+  summarize(sum(newCasesPerCap))
+
+state_capita |>
+  filter(state == "Ohio") |>
+  summarize(sum(newCasesPerCap))
+
+state_capita |>
+  filter(state == "New York") |>
+  summarize(sum(newCasesPerCap))
+
+    # Colorado cases 41.43. 
+    # Alabama cases 14.49.
+    # Ohio cases 11.98.
+    # New York cases were 6.44. 
+
+ls(state_capita)
+
+perCapNewCasesRoll = state_capita |>
+  group_by(date, state) |>
+  filter(state %in% c("New York", "Ohio", "Colorado", "Alabama")) |>
+  group_by(state) |>
+  mutate(newnewCasesPerCap = mean(sum(newCasesPerCap)),
+         roll = zoo::rollmean(newCasesPerCap, k = 7, align = "right", fill = NA)) |>
+  ungroup()
+
+perCapNewCasesRoll <- perCapNewCasesRoll |>
+  select(-CTYNAME)
+
+########
+
+
+
+state_capita2 <- inner_join(state_covid, population2, by = "state") |>
+  mutate(percapitaCumulative = cases / POPESTIMATE2021,
+         newCasesPerCap = NewCases / POPESTIMATE2021)
+
+perCapNewCasesRoll2 = state_capita2 |>
+  group_by(date, state) |>
+  filter(state %in% c("New York", "Ohio", "Colorado", "Alabama")) |>
+  group_by(state) |>
+  mutate(newnewCasesPerCap = mean(sum(newCasesPerCap)),
+         roll = zoo::rollmean(newCasesPerCap, k = 7, align = "right", fill = NA)) |>
+  ungroup()
+
+perCapNewCasesRoll2 <- perCapNewCasesRoll2 |>
+  select(-CTYNAME)
+
+ggplot(perCapNewCasesRoll2, aes(x = date)) +
+  geom_line(aes(y = roll, color = state), size = 1) +  
+  theme_linedraw() +
+  scale_color_manual(values = c("pink", "red", "green", "orange")) +
+  labs(title = "7-Day Rolling Averages of New Cases", 
+       x = "Date", y = "New Cases Per Capita")
+
+
+  ##### The firstplots show New York with the highest number of cases 
+ ##### significantly over 750,000, higher than any of the other states
+
+####### The plot of 7-day rolling means shows Colorado with the highest case numbers (in red in the plot)
+
+```
+
+
+
+```{r}
+### Question 7
+
+spatialdata = read_csv('https://raw.githubusercontent.com/mikejohnson51/csu-ess-330/refs/heads/main/resources/county-centroids.csv') |>
+  inner_join(covid) |>
+  group_by(date) |>
+  summarize(Cases_WeightedMean_x = sum(LON*cases) / sum(cases),
+            Cases_WeightedMean_y = sum(LAT*cases) / sum(cases),
+            cases = sum(cases)) |>
+  arrange(date) |>
+  mutate(Month = format(date, "%m")) |>
+  mutate(d = 1:n())
+
+####
+ggplot(spatialdata) +
+  borders("state", fill = "gray90", colour = "white") +
+  geom_point(aes(x = Cases_WeightedMean_x, y = Cases_WeightedMean_y), 
+             color = "purple", alpha = 0.25) +
+  labs(color = "Month",
+       size = "cases", 
+       x = "Longitude", y = "Latitude", 
+       title = "Weighted Center of COVID-19 Cases") +
+  theme(legend.position = "none")
+
+
+```
+
+
+
+
+
+
+
+
